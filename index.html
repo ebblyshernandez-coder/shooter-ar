@@ -393,6 +393,7 @@ body.mapeo-camara #videoAR{z-index:7}
 #mapeo.apuntando .btn{min-height:40px;padding:6px 10px;font-size:14px}
 #mapeo.apuntando .btn.sec{background:rgba(255,255,255,.12);color:#fff;border-color:rgba(255,255,255,.3);flex:1 1 40%}
 #mapeo.apuntando .btn.grande{min-height:58px;font-size:18px}
+#mapeo #mapeoReintentarXR{background:#e8590c;border-color:#e8590c;color:#fff} /* lo primero que hay que hacer si ARCore no tiene imagen */
 #mapeo.apuntando .btn.con-nota{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;line-height:1.15}
 #mapeo.apuntando .btn.con-nota small{font-size:11px;font-weight:600;opacity:.85}
 #mapeo.apuntando .btn.apagado{opacity:.55}
@@ -756,6 +757,7 @@ body.xr .inicio-ar .sujecion{display:none}
   <div class="botones oculto" data-fase="calibrar"><button class="btn" id="mapeoCalibrado">Ya he andado 5 metros</button><button class="btn sec" id="mapeoSaltarCalib">Usar la zancada de mi estatura</button></div>
   <div class="botones oculto" data-fase="inicio"><canvas id="mapeoCam" width="192" height="108" aria-label="Lo que ve la cámara: la foto del punto de inicio"></canvas><input type="text" id="mapeoInicioNota" placeholder="Dónde estás (p. ej. «puerta del salón, mirando a la ventana»)" maxlength="90"><button class="btn grande oculto" id="mapeoEmpezarXR">Empezar con ARCore: apuntar a las esquinas</button><button class="btn grande" id="mapeoEmpezar">Empezar: apuntar a las esquinas</button><button class="btn sec" id="mapeoAndar">Prefiero recorrerla andando</button></div>
   <div class="botones oculto" data-fase="apuntando">
+    <button class="btn grande oculto" id="mapeoReintentarXR">Reintentar ARCore</button>
     <button class="btn grande con-nota" id="mapeoApuntaEsquina">Esquina<small>la mira sobre la esquina del suelo</small></button>
     <button class="btn cerrar-hab oculto" id="mapeoApuntaCerrar">Cerrar habitación<small>ya están todas sus esquinas</small></button>
     <button class="btn sec oculto" id="mapeoApuntaUbicar">Ubicarme por la puerta</button>
@@ -12176,6 +12178,7 @@ function direccionApuntada(v) {
 }
 function puntoApuntado() { // el punto del suelo bajo la mira: el rayo de la cámara hasta y = 0. null sin orientación; { lejos } si no toca el suelo cerca
   if (!hayOrientacionUtil() || ar.qCrudo.lengthSq() < 0.5) return null;
+  if (xr.activo && !xr.poseOK) return null; // con ARCore, hasta su primera pose no se sabe hacia dónde mira (lo de los sensores de antes ya no vale)
   direccionApuntada(_dirMapeo);
   if (_dirMapeo.y > -0.035) return { lejos: true }; // al horizonte o hacia arriba
   const h = alturaDeMapeo(), t = h / -_dirMapeo.y, x = ar.pos.x + _dirMapeo.x * t, z = ar.pos.z + _dirMapeo.z * t, d = Math.hypot(x - ar.pos.x, z - ar.pos.z);
@@ -12279,6 +12282,13 @@ function terminarMapeo() {
   avisar('Mapa «' + m.nombre + '» guardado: ' + m.habitaciones.length + (m.habitaciones.length === 1 ? ' habitación' : ' habitaciones') + ' y ' + m.puertas.length + (m.puertas.length === 1 ? ' puerta' : ' puertas') + '. Puedes corregirlo en el editor desde la lista de juegos.', false, 8000);
   mostrarPortada(); if (typeof abrirHoja === 'function') { abrirHoja('hojaJuegos'); if (typeof pintarJuegos === 'function') pintarJuegos(); }
 }
+function volverAInicioMapeoXR() { // tras «Reintentar ARCore»: de vuelta al punto de inicio, sin lo medido en la sesión que no tenía imagen, para volver a tocar «Empezar con ARCore»
+  const m = mapeo.mapa; m.habitaciones = []; m.puertas = []; delete m.xr; m.inicio = normalizarInicio(Object.assign({}, m.inicio, { x: 0, z: 0 }));
+  mapeo.habitacion = null; mapeo.rastro = []; mapeo.deshacer = []; mapeo.caminando = false; mapeo.tramo = null; mapeo.origenTramo = null; mapeo.metodo = 'apuntar';
+  ar.congelado = false; colocarAR(0, 0); iniciarSensores();
+  ponerFaseMapeo('inicio'); // vuelve a abrir la cámara para la foto
+  avisoMapeo('Cierra las apps que estén usando la cámara (una videollamada, por ejemplo) y vuelve a tocar «Empezar con ARCore».', true);
+}
 function cancelarMapeo(hecho) {
   const conXR = xr.activo && xr.para === 'mapear';
   mapeo.activo = false; if (conXR) { terminarSesionXR(); } ar.alPaso = null; ar.pasos.sueltos = false; ar.congelado = false; mapeo.caminando = false; pararSensores(); pararCamaraAR(); pantallaDespierta(false); if (soloJuego) bloquearApaisado(false);
@@ -12346,7 +12356,7 @@ function pintarMiraMapeo() {
   const mx = W / 2, my = H / 2, r = 16 * dpr; ctx.lineWidth = 2 * dpr; ctx.strokeStyle = 'rgba(0,0,0,0.55)';
   const cruz = () => { ctx.beginPath(); ctx.arc(mx, my, r, 0, Math.PI * 2); ctx.moveTo(mx - r * 1.7, my); ctx.lineTo(mx - r * 0.45, my); ctx.moveTo(mx + r * 0.45, my); ctx.lineTo(mx + r * 1.7, my); ctx.moveTo(mx, my - r * 1.7); ctx.lineTo(mx, my - r * 0.45); ctx.moveTo(mx, my + r * 0.45); ctx.lineTo(mx, my + r * 1.7); ctx.stroke(); };
   ctx.lineWidth = 4 * dpr; cruz(); ctx.strokeStyle = cierra ? '#4ade80' : '#fff'; ctx.lineWidth = 2 * dpr; cruz();
-  const txt = mapeo.caminando ? 'caminando' : !ap ? 'esperando los sensores…' : ap.lejos ? '↓ apunta al suelo' : cierra ? 'primera esquina: cerrar' : textoMetros(ap.d) + (ap.d > 6 ? ' (lejos)' : '');
+  const txt = mapeo.caminando ? 'caminando' : !ap ? (xr.activo ? 'esperando a ARCore…' : 'esperando los sensores…') : ap.lejos ? '↓ apunta al suelo' : cierra ? 'primera esquina: cerrar' : textoMetros(ap.d) + (ap.d > 6 ? ' (lejos)' : '');
   ctx.font = '700 ' + Math.round(15 * dpr) + 'px sans-serif'; ctx.lineWidth = 4 * dpr; ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.strokeText(txt, mx, my + r * 2.6); ctx.fillStyle = cierra ? '#4ade80' : '#fff'; ctx.fillText(txt, mx, my + r * 2.6);
 }
 function pintarMapeo(soloPlano) {
@@ -12378,10 +12388,11 @@ function pintarMapeo(soloPlano) {
   }
   if (mapeo.fase === 'mapeando') { const pt = $('#mapeoParedTexto'); if (pt) { const L = largoParedActual(); pt.textContent = (mapeo.habitacion && mapeo.habitacion.cerrada) ? 'Habitación cerrada' : 'Pared: ' + L.toFixed(2).replace('.', ',') + ' m'; } }
   if (soloPlano) return;
-  const sensores = xr.activo ? 'ARCore' + (xr.sueloY == null ? (xr.fuenteHit ? ' · buscando el suelo (muévelo mirando al suelo)' : ' · sin detección de suelo') : ' · suelo detectado') : ar.hayOrientacion ? (ar.relativa ? 'giroscopio' + (rumboConNorte() ? ' y brújula' : ' (sin brújula: el norte es hacia donde mirabas al empezar)') : ar.absoluta ? 'brújula (sin giroscopio' + (apuntando ? ')' : ': cada paso va hacia donde apunte el móvil)') : 'sin brújula: el norte es hacia donde mirabas al empezar') : est.activa ? (apuntando ? 'sin giroscopio: el giro lo mide la cámara, gira despacio' : mapeo.fase === 'mapeando' ? 'sin brújula' : 'sin brújula ni giroscopio') : ar.pc.activo ? 'sin sensores' : 'esperando los sensores…';
+  const exr = xr.activo ? estadoSeguimientoXR() : '';
+  const sensores = xr.activo ? 'ARCore' + (exr === 'sinCamara' ? ' · NO LE LLEGA IMAGEN DE LA CÁMARA' : exr === 'esperando' ? ' · arrancando…' : exr === 'perdido' ? ' · seguimiento perdido (apunta a zonas con detalles y luz)' : xr.sueloY == null ? (xr.fuenteHit ? ' · buscando el suelo (muévelo mirando al suelo)' : ' · sin detección de suelo') : ' · suelo detectado') : ar.hayOrientacion ? (ar.relativa ? 'giroscopio' + (rumboConNorte() ? ' y brújula' : ' (sin brújula: el norte es hacia donde mirabas al empezar)') : ar.absoluta ? 'brújula (sin giroscopio' + (apuntando ? ')' : ': cada paso va hacia donde apunte el móvil)') : 'sin brújula: el norte es hacia donde mirabas al empezar') : est.activa ? (apuntando ? 'sin giroscopio: el giro lo mide la cámara, gira despacio' : mapeo.fase === 'mapeando' ? 'sin brújula' : 'sin brújula ni giroscopio') : ar.pc.activo ? 'sin sensores' : 'esperando los sensores…';
   const hab = mapeo.habitacion, nEsq = hab ? hab.puntos.length : 0, textoHab = hab ? hab.nombre + ': ' + nEsq + (nEsq === 1 ? ' esquina' : ' esquinas') + (hab.cerrada ? ' (cerrada)' : '') : m.habitaciones.length + (m.habitaciones.length === 1 ? ' habitación' : ' habitaciones');
   const e = $('#mapeoEstado'); if (e) e.textContent = (mapeo.fase === 'estatura' ? sensores : mapeo.fase === 'calibrar' ? mapeo.pasosCalib + ' pasos contados · ' + sensores : mapeo.fase === 'inicio' ? (mapeo.camara === 'lista' ? 'Cámara lista' : mapeo.camara === 'sin' ? 'Sin cámara (no habrá foto del inicio)' : 'Abriendo la cámara…') + ' · móvil a ' + alturaDeMapeo().toFixed(2).replace('.', ',') + ' m · ' + sensores
-    : apuntando ? textoHab + ' · ' + m.puertas.length + (m.puertas.length === 1 ? ' puerta' : ' puertas') + ' · móvil a ' + alturaDeMapeo().toFixed(2).replace('.', ',') + ' m · ' + sensores + (mapeo.caminando ? ' · ' + ar.pasos.n + ' pasos' : '') + (mapeo.camara === 'sin' ? ' · sin cámara' : '')
+    : apuntando ? textoHab + ' · ' + m.puertas.length + (m.puertas.length === 1 ? ' puerta' : ' puertas') + ' · móvil a ' + (xr.activo && !xr.poseOK ? '—' : alturaDeMapeo().toFixed(2).replace('.', ',') + ' m') + ' · ' + sensores + (mapeo.caminando ? ' · ' + ar.pasos.n + ' pasos' : '') + (mapeo.camara === 'sin' ? ' · sin cámara' : '')
     : (ar.pasos.n + ' pasos · ' + textoHab + ' · ' + m.puertas.length + (m.puertas.length === 1 ? ' puerta' : ' puertas') + ' · ' + sensores)) + (ar.pasos.nMovimientos || apuntando ? '' : ' · sin acelerómetro todavía');
   const bp = $('#mapeoPaso'); if (bp) bp.classList.toggle('secundario', ar.pasos.n > 0);
   const conBrujula = ar.hayOrientacion; // sin giroscopio ni brújula, el rumbo se lleva con los giros de 90° de cada esquina
@@ -12389,6 +12400,7 @@ function pintarMapeo(soloPlano) {
   const bc = $('#mapeoCerrar'); if (bc) bc.classList.toggle('oculto', !(mapeo.habitacion && mapeo.habitacion.puntos.length >= 3 && !mapeo.habitacion.cerrada));
   ['#mapeoEsquinaIzq', '#mapeoEsquinaDer'].forEach(s => { const b = $(s); if (b) b.classList.toggle('oculto', conBrujula); });
   const ac = $('#mapeoApuntaCerrar'); if (ac) ac.classList.toggle('oculto', !(hab && nEsq >= 3 && !hab.cerrada));
+  const rx = $('#mapeoReintentarXR'); if (rx) rx.classList.toggle('oculto', !(xr.activo && xr.para === 'mapear' && exr === 'sinCamara'));
   const au = $('#mapeoApuntaUbicar'); if (au) au.classList.toggle('oculto', !(mapeo.caminando && m.puertas.length && !xr.activo));
   const ae = $('#mapeoApuntaEsquina'); if (ae) { ae.classList.toggle('apagado', !!(hab && hab.cerrada)); const sm = ae.querySelector('small'); if (sm) sm.textContent = mapeo.caminando ? 'ya he llegado: esta es la primera' : hab && hab.cerrada ? 'esta habitación ya está cerrada' : 'la mira sobre la esquina del suelo'; }
 }
@@ -12845,7 +12857,7 @@ function pintarHUDAR() {
 function pintarEstadoAR() {
   const e = $('#estadoAR'); if (!e) return;
   let t = '';
-  if (xr.activo) t = xr.perdido > 20 ? 'ARCore ha perdido el seguimiento: apunta a una zona con detalles y buena luz' : xr.sueloY == null ? 'ARCore: mueve el móvil despacio mirando al suelo para detectarlo' : '';
+  if (xr.activo) { const ex = estadoSeguimientoXR(); t = ex === 'sinCamara' ? 'ARCore no recibe imagen de la cámara: cierra las apps que la usen (una videollamada, por ejemplo) o dale a Chrome permiso de cámara, sal con el engranaje y vuelve a entrar' : ex === 'esperando' ? 'ARCore arrancando…' : ex === 'perdido' || xr.perdido > 20 ? 'ARCore ha perdido el seguimiento: apunta a una zona con detalles y buena luz' : xr.sueloY == null ? 'ARCore: mueve el móvil despacio mirando al suelo para detectarlo' : ''; }
   else if (shooter.colocando) t = '';
   else if (window.innerHeight > window.innerWidth) t = 'gira el móvil: el shooter es apaisado';
   else if (ar.pc.activo) t = esPC ? 'arrastra para mirar, WASD para andar' : 'sin sensores: gira la vista con el dedo y anda con la palanca'; else if (est.activa) t = 'sin giroscopio: el giro lo estima la cámara' + (ar.conCamara ? '' : ' (sin cámara: gira con el dedo)'); else if (!ar.hayOrientacion) t = 'esperando los sensores…'; else if (!ar.absoluta) t = 'sin brújula: si el mapa se tuerce, vuelve al punto de inicio (menú)';
@@ -13104,7 +13116,7 @@ function actualizarCajaAR(dt) {
    horizontal más baja. Mientras no se ha visto, la altura sale de la estatura como en el modo con sensores. */
 const xr = { soportado: null, sesion: null, activo: false, para: '', refEspacio: null, fuenteHit: null, rig: null, sueloY: null, candidatosSuelo: [], tAnt: 0, poseOK: false, perdido: 0,
   posXR: new THREE.Vector3(), qXR: new THREE.Quaternion(), posMundo: new THREE.Vector3(), qMundo: new THREE.Quaternion(), proyeccion: new THREE.Matrix4(), hayProyeccion: false,
-  escenaVacia: null, afinando: null, alineado: false, origenMapeo: false, ultimoImpacto: null, error: '' };
+  escenaVacia: null, afinando: null, alineado: false, origenMapeo: false, ultimoImpacto: null, error: '', tInicio: 0, tUltimaPose: 0, pidiendo: false, reintentar: false, avisadoSinCamara: false };
 const _mXR = new THREE.Matrix4(), _pXR = new THREE.Vector3(), _qXRt = new THREE.Quaternion(), _sXR = new THREE.Vector3(1, 1, 1), _nXR = new THREE.Vector3();
 function xrActivo() { return xr.activo; }
 /* ¿hay ARCore por WebXR? (Chrome en Android con ARCore, página segura). Se mira una vez y se enseñan los botones */
@@ -13124,14 +13136,18 @@ function pintarBotonesXR() {
 /* abrir la sesión: tiene que ser lo primero que pase al tocar el botón (el navegador exige el toque reciente) */
 async function iniciarSesionXR(para) {
   if (xr.sesion) return true;
+  if (xr.pidiendo) return false; // un segundo toque mientras se abre: se ignora
   if (!navigator.xr) { avisar('Este navegador no tiene WebXR: ábrelo en Chrome con ARCore.', true, 6000); return false; }
   let s;
+  xr.pidiendo = true;
   try { s = await navigator.xr.requestSession('immersive-ar', { optionalFeatures: ['hit-test', 'dom-overlay', 'local-floor'], domOverlay: { root: document.body } }); }
   catch (e) { xr.error = (e && (e.message || e.name)) || String(e); avisar('No se pudo abrir ARCore: ' + xr.error + '. Comprueba que «Servicios de Google Play para RA» está instalado y actualizado.', true, 10000); return false; }
+  finally { xr.pidiendo = false; }
   if ('domOverlayState' in s && !s.domOverlayState) { // sin la capa de la página encima no habría botones ni mira: mejor no entrar
     xr.error = 'sin dom-overlay'; try { await s.end(); } catch (e) { /* nada */ }
     avisar('Este Chrome abre ARCore pero sin poder poner los botones encima: actualiza Chrome y vuelve a probar.', true, 9000); return false;
   }
+  xr.tInicio = performance.now(); xr.tUltimaPose = 0; xr.reintentar = false; xr.avisadoSinCamara = false;
   xr.sesion = s; xr.para = para; xr.activo = true; xr.sueloY = null; xr.candidatosSuelo = []; xr.poseOK = false; xr.perdido = 0; xr.tAnt = 0; xr.afinando = null; xr.alineado = false; xr.hayProyeccion = false; xr.origenMapeo = false;
   document.body.classList.add('xr');
   s.addEventListener('end', finSesionXR);
@@ -13152,13 +13168,13 @@ async function iniciarSesionXR(para) {
 }
 function finSesionXR() {
   if (!xr.activo && !xr.sesion) return;
-  const para = xr.para; xr.activo = false; xr.sesion = null; xr.para = ''; xr.refEspacio = null;
+  const para = xr.para, reintento = xr.reintentar; xr.activo = false; xr.sesion = null; xr.para = ''; xr.refEspacio = null; xr.reintentar = false;
   if (xr.fuenteHit) { try { xr.fuenteHit.cancel(); } catch (e) { /* nada */ } xr.fuenteHit = null; }
   renderer.setAnimationLoop(null); renderer.xr.enabled = false;
   if (xr.rig) { escena.attach(camara); escena.remove(camara); escena.remove(xr.rig); } // la cámara vuelve a no colgar de nada
   document.body.classList.remove('xr');
   camara.updateProjectionMatrix();
-  if (para === 'mapear' && mapeo.activo) cancelarMapeo(true);
+  if (para === 'mapear' && mapeo.activo) { if (reintento) volverAInicioMapeoXR(); else cancelarMapeo(true); }
   if (shooter.activo) terminarShooter();
   else { renderer.setClearColor(0x000000, 1); try { aplicarAmbiente(); } catch (e) { /* nada */ } }
   ajustarTamano(); tAnterior = performance.now(); despertar();
@@ -13178,7 +13194,7 @@ function leerXR(frame) {
   const ref = xr.refEspacio || renderer.xr.getReferenceSpace(); if (!ref) return;
   const pose = frame.getViewerPose(ref);
   if (!pose) { xr.perdido++; return; }
-  xr.perdido = 0; const tr = pose.transform;
+  xr.perdido = 0; xr.tUltimaPose = performance.now(); const tr = pose.transform;
   xr.posXR.set(tr.position.x, tr.position.y, tr.position.z); xr.qXR.set(tr.orientation.x, tr.orientation.y, tr.orientation.z, tr.orientation.w);
   if (!xr.poseOK) { xr.poseOK = true; alPrimeraPoseXR(); }
   if (xr.fuenteHit) { // el suelo y el punto del centro de la vista
@@ -13204,6 +13220,15 @@ function anotarSuelo(y) {
   xr.sueloY = suelo; xr.rig.position.y = -suelo; // el suelo de verdad pasa a ser y = 0
   if (nuevo) { vibrar([15, 30, 15]); if (shooter.activo) { mensajeAR('Suelo detectado: los bots ya pisan tu suelo', 2); if (xr.afinando) pintarAfinadoXR(); } else if (mapeo.activo) avisoMapeo('Suelo detectado. Ya puedes apuntar a las esquinas.'); }
 }
+/* ¿cómo va el seguimiento? 'esperando' (ARCore arrancando), 'sinCamara' (en 5 s no ha llegado ninguna pose: a ARCore no le llega la imagen
+   de la cámara, casi siempre porque otra app la está usando, como una videollamada), 'perdido' (llegaban y dejaron de llegar) u 'ok' */
+function estadoSeguimientoXR() {
+  if (!xr.activo) return '';
+  const ahora = performance.now();
+  if (!xr.poseOK) return ahora - xr.tInicio > 5000 ? 'sinCamara' : 'esperando';
+  return ahora - xr.tUltimaPose > 1500 ? 'perdido' : 'ok';
+}
+const TEXTO_SIN_CAMARA = 'ARCore no recibe imagen de la cámara. Suele ser porque otra app la está usando (una videollamada, por ejemplo) o porque Chrome no tiene permiso de cámara (Ajustes del móvil → Aplicaciones → Chrome → Permisos). Arréglalo y toca «Reintentar ARCore». Si sigue igual, actualiza Chrome y «Servicios de Google Play para RA».';
 function alturaCamaraXR() { return xr.sueloY != null ? xr.posXR.y - xr.sueloY : alturaMovilDe(ajustesShooter()); }
 function alPrimeraPoseXR() { // hasta ver el suelo, la altura del móvil sale de la estatura
   if (xr.sueloY == null) xr.rig.position.y = alturaMovilDe(ajustesShooter()) - xr.posXR.y;
@@ -13256,10 +13281,16 @@ async function jugarConARCore() { // desde la portada o la lista de juegos: prim
   try { await empezarShooter({ xr: true }); } catch (e) { avisar('No se pudo empezar: ' + (e && e.message || e), true, 6000); terminarSesionXR(); }
 }
 async function mapearConARCore() { // desde la fase de inicio del mapeado: la foto ya está; la cámara se suelta para ARCore
-  if (!mapeo.activo || mapeo.fase !== 'inicio') return;
-  const foto = guardarInicioMapeo(); mapeo.fotoXR = !!foto;
-  pararCamaraAR(); mapeo.camara = ''; // ARCore necesita la cámara para él solo: se suelta antes de pedir la sesión (sin esperar nada, para no gastar el toque)
-  const ok = await iniciarSesionXR('mapear');
+  if (!mapeo.activo || mapeo.fase !== 'inicio' || mapeo.abriendoXR) return;
+  mapeo.abriendoXR = true; let ok = false;
+  try {
+    const foto = guardarInicioMapeo(); mapeo.fotoXR = !!foto;
+    const habia = ar.conCamara || !!ar.pista || mapeo.camara === 'abriendo';
+    pararCamaraAR(); mapeo.camara = ''; // ARCore necesita la cámara para él solo: se suelta antes de pedir la sesión
+    if (habia) { avisoMapeo('Abriendo ARCore…'); await new Promise(r => setTimeout(r, 700)); } // y se le da un momento a Android para liberarla (el toque sigue valiendo unos segundos)
+    if (!mapeo.activo || mapeo.fase !== 'inicio') return;
+    ok = await iniciarSesionXR('mapear');
+  } finally { mapeo.abriendoXR = false; }
   if (!ok) { if (mapeo.activo && mapeo.fase === 'inicio') abrirCamaraMapeo(); return; } // no se abrió: se sigue como antes, con la cámara
   // al llegar la primera pose, empezarApuntandoXR
   ponerFaseMapeo('apuntando'); avisoMapeo('Abriendo ARCore… mueve un poco el móvil mirando al suelo para que lo detecte.');
@@ -13270,7 +13301,15 @@ function empezarApuntandoXR() { // el mapa se mide en el espacio de esta sesión
   mapeo.metodo = 'apuntar'; mapeo.caminando = false; mapeo.origenTramo = null; mapeo.tramo = null; mapeo.rastro = [[0, 0]]; ar.congelado = true;
   if (mapeo.fase !== 'apuntando') ponerFaseMapeo('apuntando');
 }
-function cuadroMapeoXR(dt) { if (!mapeo.activo) return; mapeo.cuadros = (mapeo.cuadros || 0) + 1; if (mapeo.fase === 'apuntando') pintarMiraMapeo(); pintarMapeo(mapeo.cuadros % 15 !== 0); }
+function cuadroMapeoXR(dt) {
+  if (!mapeo.activo) return; mapeo.cuadros = (mapeo.cuadros || 0) + 1;
+  if (mapeo.fase === 'apuntando') pintarMiraMapeo();
+  const ex = estadoSeguimientoXR();
+  if (ex === 'sinCamara' && (!xr.avisadoSinCamara || mapeo.cuadros % 120 === 0)) { if (!xr.avisadoSinCamara) vibrar([60, 40, 60]); xr.avisadoSinCamara = true; avisoMapeo(TEXTO_SIN_CAMARA, true); pintarMapeo(); } // se repite para que no se apague mientras dure
+  else if (ex !== 'sinCamara' && xr.avisadoSinCamara) { xr.avisadoSinCamara = false; avisoMapeo('Ya llega la imagen: mueve el móvil mirando al suelo para que lo detecte.'); }
+  pintarMapeo(mapeo.cuadros % 15 !== 0);
+}
+function reintentarMapeoXR() { if (!(xr.activo && xr.para === 'mapear')) return; xr.reintentar = true; terminarSesionXR(); } // se cierra ARCore y el mapeado vuelve al punto de inicio
 
 /* ---------- biblioteca de modelos ---------- */
 let biblioteca = LS.get('forja.biblioteca', []);
@@ -15360,7 +15399,7 @@ function arrancar() {
   charla.forEach(pintarMensaje); $('#ideas').classList.toggle('oculto', charla.length > 0);
   pintarEstadoCerebro(); pintarProgreso(); actualizarControles(); iniciarPuente();
   biblioteca.forEach(a => { if (a.estado === 'generando') correrPipeline(a); else if (a.anim) correrAnim(a); });
-  $('#versionNota').textContent = 'Forja 0.24, Shooter AR (modo ARCore en Chrome con un móvil compatible: la posición y el suelo los da ARCore al centímetro, el bot y la caja quedan clavados aunque camines, el mapa se mide apuntando y en otra partida se clava a la casa apuntando a dos esquinas; la cámara trasera como vista, mira, gatillo táctil, bots arqueros que recorren tu casa y se quedan a distancia de tiro, partida que empieza colocándose en el punto de inicio con la foto guardada, caja de herramientas que se abre apuntándola, compilación «solo juego» con el arquero dentro; con giroscopio manda el giroscopio y la brújula solo pone el norte al empezar, el campo de visión de la cámara se mide solo al girar el móvil, y la altura del móvil va según cómo lo sujetas; bots de 1,75 m que aparecen al fondo, se adaptan al tamaño de la habitación y cambian de sitio entre disparos) y mapas de la casa apuntando con la mira a las esquinas del suelo (sin andar: la distancia sale de la altura del móvil y su inclinación) o recorriéndola andando (solo cuenta lo que se avanza a lo largo de cada pared; la esquina de salida se marca sola); niveles de gráficos (Bajo, Medio, Alto, Máximo como en Meshy: texturas originales, luz de estudio, SSAO, bloom, SMAA; en móvil, Alto y Máximo adaptan la resolución sola para sostener 40 o 30 cuadros y dejan el posprocesado como opción) y proyecto completo que viaja a un PC por el puente o en un archivo .forja; galería de animaciones con códigos A1, A2…; botones que se recuerdan durante una acción; escalada con la palanca; sólidos más firmes; parkour medido: cada clip arranca en el tramo justo para caer sobre el obstáculo (desde, hasta, suelo), recorridos en metros de verdad; calidad automática según la GPU (resolución y sombras por niveles), el juego sigue a tiempo real hasta 10 cuadros por segundo; muchas animaciones de una vez con una sola recarga' + (esNativo ? ', app instalada' : enVisor ? ', vista previa dentro de Claude' : '') + (evalPermitido ? '' : ', sin ejecución de código en este entorno');
+  $('#versionNota').textContent = 'Forja 0.25, Shooter AR (modo ARCore en Chrome con un móvil compatible: la posición y el suelo los da ARCore al centímetro, el bot y la caja quedan clavados aunque camines, el mapa se mide apuntando y en otra partida se clava a la casa apuntando a dos esquinas; si a ARCore no le llega la imagen de la cámara lo dice y se puede reintentar; la cámara trasera como vista, mira, gatillo táctil, bots arqueros que recorren tu casa y se quedan a distancia de tiro, partida que empieza colocándose en el punto de inicio con la foto guardada, caja de herramientas que se abre apuntándola, compilación «solo juego» con el arquero dentro; con giroscopio manda el giroscopio y la brújula solo pone el norte al empezar, el campo de visión de la cámara se mide solo al girar el móvil, y la altura del móvil va según cómo lo sujetas; bots de 1,75 m que aparecen al fondo, se adaptan al tamaño de la habitación y cambian de sitio entre disparos) y mapas de la casa apuntando con la mira a las esquinas del suelo (sin andar: la distancia sale de la altura del móvil y su inclinación) o recorriéndola andando (solo cuenta lo que se avanza a lo largo de cada pared; la esquina de salida se marca sola); niveles de gráficos (Bajo, Medio, Alto, Máximo como en Meshy: texturas originales, luz de estudio, SSAO, bloom, SMAA; en móvil, Alto y Máximo adaptan la resolución sola para sostener 40 o 30 cuadros y dejan el posprocesado como opción) y proyecto completo que viaja a un PC por el puente o en un archivo .forja; galería de animaciones con códigos A1, A2…; botones que se recuerdan durante una acción; escalada con la palanca; sólidos más firmes; parkour medido: cada clip arranca en el tramo justo para caer sobre el obstáculo (desde, hasta, suelo), recorridos en metros de verdad; calidad automática según la GPU (resolución y sombras por niveles), el juego sigue a tiempo real hasta 10 cuadros por segundo; muchas animaciones de una vez con una sola recarga' + (esNativo ? ', app instalada' : enVisor ? ', vista previa dentro de Claude' : '') + (evalPermitido ? '' : ', sin ejecución de código en este entorno');
   requestAnimationFrame(cuadro);
 }
 window.__forja = { estadoParaClaude, ejecutarOrdenes, leerOrdenes, vueltaDelPuente, puente, dejarNota, textoClaudeMd, conectarPuente, colocarAsset, recargarObjetosDe, cajaDeObjeto, generarTexturaSuelo, ponerTexturaSuelo, get ambiente() { return ambiente; }, suelo, PROVEEDORES, compatActivo, get marcas() { return marcas; }, crearBandera, puntoDeLinea, terminarLinea, tocarEnEditor, ponerHerramienta, ponerContexto, controlar, camEd, retexturizarObjeto, objetos, ajustes, usarHerramienta, HERRAMIENTAS, serializarEscena, aplicarEstado, ponerModo, importarGLB, generarModelo, anadirAnimaciones, ponerEsqueleto, tripo, pedir, BD, cargarGLTF, catalogoTripo, resolverImagen, get ultimaImagen() { return ultimaImagen; }, get esNativo() { return esNativo; }, enviarAlCerebro, resumenEscena, deshacer, get biblioteca() { return biblioteca; }, get modo() { return modo; }, pulsarBoton, botonesAccion, camJu, mando, apunte, capturaJPEG, probarJuego, HERRAMIENTAS_PUENTE, apiJuego, crearYo, mapaHuesos, jugador, camara, formaDe, usoDe, equipar, analizarForma, mejorarRig, analizarMano, poseDeAgarre, dedosDePose, POSES_MANO, retargetearClip, cargarAnimaciones, cargarAnimacionesDe, compactarAnimaciones, expandirAnimaciones, velocidadPorPasos, NIVELES, ponerNivel, aplicarCalidad, borrarObjeto, seleccionar, cerrarHojas, abrirHoja, abrirGaleria, get galeria() { return galeria; }, codigosDeAnimaciones, GRAFICOS, MOVIL, NIVELES_RES, escalonActual, escalaRender, medirRendimiento, get shooter() { return shooter; }, get ar() { return ar; }, get mano() { return mano; }, get mapeo() { return mapeo; }, get mapas() { return mapas; }, empezarShooter, terminarShooter, dispararJugador, evaluarGesto, probarMano: () => iniciarMano(), cuaternionDeOrientacion, rumboDeCuaternion, rumboCrudo, fijarGiroMapa, rumboConNorte, enderezarHabitacion, paredesDeMapa, rejillaDeMapa, caminoA, suavizarCamino, lineaLibre, limitarPorParedes, mapaDePrueba, normalizarMapa, guardarMapa, empezarMapeo, marcarEsquina, marcarPuerta, nuevaHabitacion, terminarMapeo, cancelarMapeo, calibrarZancada, empezarRecorrido, ponerFaseMapeo, ponerEstatura, ajustarPared, largoParedActual, deshacerMapeo, cerrarHabitacion, rumboDeMapeo, xr, comprobarXR, iniciarSesionXR, terminarSesionXR, jugarConARCore, mapearConARCore, alinearXRConInicio, ajusteDosEsquinas, aplicarAjusteRig, marcarEsquinaAfinadoXR, saltarAfinadoXR, alturaCamaraXR, pasoJuego, caja, empezarApuntando, marcarEsquinaApuntando, cerrarHabitacionApuntando, marcarPuertaApuntando, otraHabitacionApuntando, ubicarmePorPuerta, puntoApuntado, alturaDeMapeo, poligonoCruzado, distanciasDeSala, elegirPuesto, puntosDeAparicion, proyeccionAR, ejeDeTramo, posicionDeTramo, cerrarConRetorno, medidasDeHabitacion, mapaAlEditor, mapaDesdeEditor, ajustesShooter, zancadaDe, alturaMovilDe, pintarJuegos, iniciarSensores, pararSensores, actualizarAR, DIFICULTAD, mostrarInicioAR, confirmarInicioAR, silenciarPasos, avanzarAR, fotoDeCamara, ALTURA_BOT, get caja() { return caja; }, alternarCaja, colocarCajaAR, quitarCajaAR, get calibFov() { return calibFov; }, reiniciarCalibFov, fovEfectivo, ponerSujecion, get soloJuego() { return soloJuego; }, prepararJuego, mostrarPortada, get est() { return est; }, get flujo() { return flujo; }, desplazamientoEntre, inclinacionPorGravedad, girarRumboEstimado, ponerRumboEstimado, pasoManual, hayOrientacionUtil, estadoSensores, ponerGraficos, nivelGraficos, claveGraficos, recargarModelos, exportarProyecto, importarProyecto, empaquetarProyecto, enviarProyectoAlPuente, traerProyectoDelPuente, get post() { return post; }, get esPC() { return esPC; }, rolesDe, importarAnimaciones, ponerAnimaciones, get renderer() { return renderer; }, rendimiento, ajustarTamano, prepararRaiz, puntoDeRaiz, sondear, alturaSuelo, get solidos() { return solidos; } };
@@ -15422,6 +15461,7 @@ function pintarJuegos() {
   $('#mapeoApuntaDeshacer').addEventListener('click', toque(() => deshacerMapeo()));
   $('#mapeoApuntaOtra').addEventListener('click', toque(() => otraHabitacionApuntando()));
   $('#mapeoApuntaTerminar').addEventListener('click', toque(() => terminarMapeo()));
+  $('#mapeoReintentarXR').addEventListener('click', () => reintentarMapeoXR());
   $('#mapeoInicioNota').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } });
   $('#mapeoEsquina').addEventListener('click', toque(() => marcarEsquina(0)));
   $('#mapeoEsquinaIzq').addEventListener('click', toque(() => marcarEsquina(90)));
